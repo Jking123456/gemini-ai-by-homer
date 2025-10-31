@@ -1,88 +1,91 @@
 // api/webhook.js
 import fetch from "node-fetch";
+import FormData from "form-data";
 
 export default async function handler(req, res) {
   try {
-    if (req.method !== "POST") {
-      return res.status(405).json({ error: "Method not allowed" });
-    }
+    if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
-    const body = req.body;
-    if (!body.message) return res.status(200).send("No message");
+    const message = req.body.message;
+    if (!message) return res.status(200).send("No message received.");
 
-    const chatId = body.message.chat.id;
-    const text = body.message.text || body.message.caption || "";
-    const photo = body.message.photo || [];
+    const chatId = message.chat.id;
+    const text = message.text || message.caption || "";
+    const photos = message.photo || [];
 
-    // Send typing action
+    // show typing...
     await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendChatAction`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chat_id: chatId, action: "typing" }),
     });
 
-    let imageUrl = "";
-    if (photo.length > 0) {
-      // Get the highest quality photo
-      const fileId = photo[photo.length - 1].file_id;
+    let publicImageUrl = "";
 
-      // Fetch file info from Telegram
-      const fileRes = await fetch(
+    // if user sent an image
+    if (photos.length > 0) {
+      const fileId = photos[photos.length - 1].file_id;
+
+      // get Telegram file path
+      const fileInfoRes = await fetch(
         `https://api.telegram.org/bot${process.env.BOT_TOKEN}/getFile?file_id=${fileId}`
       );
-      const fileData = await fileRes.json();
+      const fileInfo = await fileInfoRes.json();
 
-      if (fileData.ok && fileData.result?.file_path) {
-        imageUrl = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${fileData.result.file_path}`;
+      if (fileInfo.ok) {
+        const fileUrl = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${fileInfo.result.file_path}`;
+
+        // download the image from Telegram
+        const fileBuffer = await fetch(fileUrl).then((r) => r.arrayBuffer());
+
+        // upload to telegra.ph to make it public
+        const form = new FormData();
+        form.append("file", Buffer.from(fileBuffer), "image.jpg");
+
+        const telegraphRes = await fetch("https://telegra.ph/upload", {
+          method: "POST",
+          body: form,
+        });
+        const telegraphData = await telegraphRes.json();
+
+        if (telegraphData[0]?.src) {
+          publicImageUrl = "https://telegra.ph" + telegraphData[0].src;
+        }
       }
     }
 
-    // Random user ID
+    // random user ID
     const randomUser = Math.floor(100000 + Math.random() * 900000);
 
-    // Build Gemini API URL safely
+    // Gemini API endpoint
     const apiUrl = new URL("https://api-library-kohi.onrender.com/api/gemini");
     apiUrl.searchParams.set("prompt", text || "Describe this image");
-    if (imageUrl) apiUrl.searchParams.set("imageUrl", imageUrl);
+    if (publicImageUrl) apiUrl.searchParams.set("imageUrl", publicImageUrl);
     apiUrl.searchParams.set("user", randomUser);
 
-    // Call Gemini API
-    const response = await fetch(apiUrl.toString());
-    const textResponse = await response.text();
+    const geminiRes = await fetch(apiUrl.toString());
+    const geminiText = await geminiRes.text();
 
-    let cleanMessage = "";
-
+    let finalReply = "";
     try {
-      const parsed = JSON.parse(textResponse);
-      cleanMessage = parsed.data || parsed.message || parsed.response || "";
+      const parsed = JSON.parse(geminiText);
+      finalReply = parsed.data || parsed.message || "⚠️ No clear response.";
     } catch {
-      cleanMessage = textResponse;
+      finalReply = geminiText || "⚠️ No response received from Gemini API.";
     }
 
-    cleanMessage = cleanMessage
-      .replace(/\\n/g, "\n")
-      .replace(/\nn/g, "\n")
-      .replace(/n\*/g, "\n•")
-      .replace(/\*/g, "")
-      .replace(/\\u\d+/g, "")
-      .replace(/\s{2,}/g, " ")
-      .trim();
-
-    if (!cleanMessage) cleanMessage = "⚠️ No response received from Gemini API.";
-
-    // Send clean message
     await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         chat_id: chatId,
-        text: cleanMessage,
+        text: finalReply,
       }),
     });
 
-    res.status(200).json({ ok: true });
-  } catch (err) {
-    console.error("Webhook Error:", err);
-    res.status(500).json({ error: "Internal Server Error" });
+    return res.status(200).json({ ok: true });
+  } catch (error) {
+    console.error("Error in webhook:", error);
+    return res.status(500).json({ error: "Internal Server Error" });
   }
 }
