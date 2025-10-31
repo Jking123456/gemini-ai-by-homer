@@ -82,7 +82,7 @@ export default async function handler(req, res) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           chat_id: chatId,
-          text: "👋 *Hi!* I’m your *Gemini AI Bot.*\n\nSend me a message or an image to analyze.",
+          text: "👋 *Hi!* I’m your *Google Gemini Created by Homer Rebatis.*\n\nSend me a message or an image to analyze.",
           parse_mode: "Markdown",
         }),
       });
