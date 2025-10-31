@@ -1,6 +1,3 @@
-import FormData from "form-data";
-import fetch from "node-fetch";
-
 export const config = { api: { bodyParser: false } };
 
 // Helper: random number string
@@ -47,9 +44,8 @@ async function uploadToFreeImage(fileUrl) {
   try {
     const fileRes = await fetch(fileUrl);
     const buffer = await fileRes.arrayBuffer();
-
     const form = new FormData();
-    form.append("file", Buffer.from(buffer), "upload.jpg");
+    form.append("image", new Blob([buffer]), "upload.jpg");
 
     const res = await fetch("https://api-library-kohi.onrender.com/api/freeimage", {
       method: "POST",
@@ -57,8 +53,8 @@ async function uploadToFreeImage(fileUrl) {
     });
 
     const json = await res.json();
-    if (json?.status && json.data?.url) {
-      return json.data.url;
+    if (json?.status && json.data?.display_url) {
+      return json.data.display_url;
     }
   } catch (err) {
     console.error("❌ Image upload failed:", err);
@@ -68,8 +64,7 @@ async function uploadToFreeImage(fileUrl) {
 
 export default async function handler(req, res) {
   try {
-    if (req.method !== "POST")
-      return res.status(405).json({ error: "Method Not Allowed" });
+    if (req.method !== "POST") return res.status(405).json({ error: "Method Not Allowed" });
 
     // Read raw Telegram body
     const chunks = [];
@@ -105,7 +100,7 @@ export default async function handler(req, res) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           chat_id: chatId,
-          text: "👋 Hi! I’m your Gemini bot.\nSend me text or an image with a caption to analyze it.",
+          text: "👋 Hi! I’m your Gemini bot. Send me text or an image with a caption to analyze it.",
         }),
       });
       return res.status(200).end();
@@ -137,27 +132,28 @@ export default async function handler(req, res) {
     let reply = data.data || data.response || "⚠️ No response received from Gemini API.";
 
     // Format as code if needed
-    const sendBody = {
-      chat_id: chatId,
-      text: reply,
-    };
-
     if (isCodeRequest(prompt)) {
-      sendBody.text = `<pre><code>${reply
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")}</code></pre>`;
-      sendBody.parse_mode = "HTML";
+      reply = `<pre><code>${reply.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</code></pre>`;
+      await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: reply,
+          parse_mode: "HTML",
+        }),
+      });
+    } else {
+      await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId, text: reply }),
+      });
     }
-
-    await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(sendBody),
-    });
 
     return res.status(200).end();
   } catch (error) {
     console.error("❌ Webhook Error:", error);
     res.status(500).json({ error: error.message });
   }
-      }
+}
