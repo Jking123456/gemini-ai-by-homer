@@ -1,91 +1,121 @@
-// api/webhook.js
-import fetch from "node-fetch";
-import FormData from "form-data";
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
+
+function randomNumberString(length = 10) {
+  let result = "";
+  for (let i = 0; i < length; i++) result += Math.floor(Math.random() * 10);
+  return result;
+}
+
+// Escape MarkdownV2 special characters
+function escapeMarkdown(text) {
+  return text
+    .replace(/_/g, "\\_")
+    .replace(/\*/g, "\\*")
+    .replace(/\[/g, "\\[")
+    .replace(/\]/g, "\\]")
+    .replace(/\(/g, "\\(")
+    .replace(/\)/g, "\\)")
+    .replace(/~/g, "\\~")
+    .replace(/`/g, "\\`")
+    .replace(/>/g, "\\>")
+    .replace(/#/g, "\\#")
+    .replace(/\+/g, "\\+")
+    .replace(/-/g, "\\-")
+    .replace(/=/g, "\\=")
+    .replace(/\|/g, "\\|")
+    .replace(/{/g, "\\{")
+    .replace(/}/g, "\\}")
+    .replace(/\./g, "\\.")
+    .replace(/!/g, "\\!");
+}
 
 export default async function handler(req, res) {
   try {
-    if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+    if (req.method !== "POST") return res.status(405).json({ error: "Method Not Allowed" });
 
-    const message = req.body.message;
-    if (!message) return res.status(200).send("No message received.");
+    // Parse Telegram raw JSON safely
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const rawBody = Buffer.concat(chunks).toString();
 
-    const chatId = message.chat.id;
-    const text = message.text || message.caption || "";
-    const photos = message.photo || [];
+    let body = {};
+    try {
+      body = JSON.parse(rawBody || "{}");
+    } catch {
+      return res.status(200).end();
+    }
 
-    // show typing...
+    if (!body.message) return res.status(200).end();
+
+    const chatId = body.message.chat.id;
+    const user = randomNumberString(10);
+    let prompt = "";
+    let imageUrl = "";
+
+    if (body.message.text) prompt = body.message.text;
+
+    // Handle photo
+    if (body.message.photo?.length > 0) {
+      const fileId = body.message.photo.at(-1).file_id;
+      const fileRes = await fetch(
+        `https://api.telegram.org/bot${process.env.BOT_TOKEN}/getFile?file_id=${fileId}`
+      );
+      const fileData = await fileRes.json();
+      imageUrl = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${fileData.result.file_path}`;
+    }
+
+    // Typing indicator
     await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendChatAction`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chat_id: chatId, action: "typing" }),
     });
 
-    let publicImageUrl = "";
-
-    // if user sent an image
-    if (photos.length > 0) {
-      const fileId = photos[photos.length - 1].file_id;
-
-      // get Telegram file path
-      const fileInfoRes = await fetch(
-        `https://api.telegram.org/bot${process.env.BOT_TOKEN}/getFile?file_id=${fileId}`
-      );
-      const fileInfo = await fileInfoRes.json();
-
-      if (fileInfo.ok) {
-        const fileUrl = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${fileInfo.result.file_path}`;
-
-        // download the image from Telegram
-        const fileBuffer = await fetch(fileUrl).then((r) => r.arrayBuffer());
-
-        // upload to telegra.ph to make it public
-        const form = new FormData();
-        form.append("file", Buffer.from(fileBuffer), "image.jpg");
-
-        const telegraphRes = await fetch("https://telegra.ph/upload", {
-          method: "POST",
-          body: form,
-        });
-        const telegraphData = await telegraphRes.json();
-
-        if (telegraphData[0]?.src) {
-          publicImageUrl = "https://telegra.ph" + telegraphData[0].src;
-        }
-      }
+    // Handle /start command
+    if (prompt === "/start") {
+      await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: "👋 *Hi!* I’m your *Gemini AI Bot.*\n\nSend me a message or an image to analyze.",
+          parse_mode: "Markdown",
+        }),
+      });
+      return res.status(200).end();
     }
 
-    // random user ID
-    const randomUser = Math.floor(100000 + Math.random() * 900000);
+    // Call your Gemini API
+    const apiUrl = `https://api-library-kohi.onrender.com/api/gemini?prompt=${encodeURIComponent(
+      prompt
+    )}&imageUrl=${encodeURIComponent(imageUrl)}&user=${user}`;
 
-    // Gemini API endpoint
-    const apiUrl = new URL("https://api-library-kohi.onrender.com/api/gemini");
-    apiUrl.searchParams.set("prompt", text || "Describe this image");
-    if (publicImageUrl) apiUrl.searchParams.set("imageUrl", publicImageUrl);
-    apiUrl.searchParams.set("user", randomUser);
+    const response = await fetch(apiUrl);
+    const data = await response.json();
 
-    const geminiRes = await fetch(apiUrl.toString());
-    const geminiText = await geminiRes.text();
+    const rawReply =
+      data.data || data.response || "⚠️ No response received from Gemini API.";
 
-    let finalReply = "";
-    try {
-      const parsed = JSON.parse(geminiText);
-      finalReply = parsed.data || parsed.message || "⚠️ No clear response.";
-    } catch {
-      finalReply = geminiText || "⚠️ No response received from Gemini API.";
-    }
+    const reply = escapeMarkdown(rawReply);
 
+    // Send reply as a code block
     await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         chat_id: chatId,
-        text: finalReply,
+        text: `\`\`\`\n${reply}\n\`\`\``,
+        parse_mode: "MarkdownV2",
       }),
     });
 
-    return res.status(200).json({ ok: true });
+    return res.status(200).end();
   } catch (error) {
-    console.error("Error in webhook:", error);
-    return res.status(500).json({ error: "Internal Server Error" });
+    console.error("❌ Webhook Error:", error);
+    res.status(500).json({ error: error.message });
   }
-}
+                                                                              }
