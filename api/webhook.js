@@ -10,6 +10,29 @@ function randomNumberString(length = 10) {
   return result;
 }
 
+// Escape MarkdownV2 special characters
+function escapeMarkdown(text) {
+  return text
+    .replace(/_/g, "\\_")
+    .replace(/\*/g, "\\*")
+    .replace(/\[/g, "\\[")
+    .replace(/\]/g, "\\]")
+    .replace(/\(/g, "\\(")
+    .replace(/\)/g, "\\)")
+    .replace(/~/g, "\\~")
+    .replace(/`/g, "\\`")
+    .replace(/>/g, "\\>")
+    .replace(/#/g, "\\#")
+    .replace(/\+/g, "\\+")
+    .replace(/-/g, "\\-")
+    .replace(/=/g, "\\=")
+    .replace(/\|/g, "\\|")
+    .replace(/{/g, "\\{")
+    .replace(/}/g, "\\}")
+    .replace(/\./g, "\\.")
+    .replace(/!/g, "\\!");
+}
+
 export default async function handler(req, res) {
   try {
     if (req.method !== "POST") return res.status(405).json({ error: "Method Not Allowed" });
@@ -23,7 +46,7 @@ export default async function handler(req, res) {
     try {
       body = JSON.parse(rawBody || "{}");
     } catch {
-      return res.status(200).end(); // skip invalid payloads
+      return res.status(200).end();
     }
 
     if (!body.message) return res.status(200).end();
@@ -35,7 +58,7 @@ export default async function handler(req, res) {
 
     if (body.message.text) prompt = body.message.text;
 
-    // Handle photo message
+    // Handle photo
     if (body.message.photo?.length > 0) {
       const fileId = body.message.photo.at(-1).file_id;
       const fileRes = await fetch(
@@ -59,7 +82,8 @@ export default async function handler(req, res) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           chat_id: chatId,
-          text: "👋 Hi! I’m your Gemini bot. Send me a question or an image to analyze!",
+          text: "👋 *Hi!* I’m your *Gemini AI Bot.*\n\nSend me a message or an image to analyze.",
+          parse_mode: "Markdown",
         }),
       });
       return res.status(200).end();
@@ -73,18 +97,19 @@ export default async function handler(req, res) {
     const response = await fetch(apiUrl);
     const data = await response.json();
 
-    const reply =
-      data.data ||
-      data.response ||
-      "⚠️ No response received from Gemini API.";
+    const rawReply =
+      data.data || data.response || "⚠️ No response received from Gemini API.";
 
-    // Send reply to Telegram
+    const reply = escapeMarkdown(rawReply);
+
+    // Send reply as a code block
     await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         chat_id: chatId,
-        text: reply,
+        text: `\`\`\`\n${reply}\n\`\`\``,
+        parse_mode: "MarkdownV2",
       }),
     });
 
