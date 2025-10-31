@@ -1,3 +1,6 @@
+// api/webhook.js
+import fetch from "node-fetch";
+
 export default async function handler(req, res) {
   try {
     if (req.method !== "POST") {
@@ -8,29 +11,43 @@ export default async function handler(req, res) {
     if (!body.message) return res.status(200).send("No message");
 
     const chatId = body.message.chat.id;
-    const text = body.message.text || "";
+    const text = body.message.text || body.message.caption || "";
     const photo = body.message.photo || [];
-    const caption = body.message.caption || "";
 
-    const baseUrl = "https://api-library-kohi.onrender.com/api/gemini";
-    let prompt = encodeURIComponent(text || caption || "Describe this image");
+    // Send typing action
+    await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendChatAction`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, action: "typing" }),
+    });
+
     let imageUrl = "";
-
-    // If image is attached
     if (photo.length > 0) {
+      // Get the highest quality photo
       const fileId = photo[photo.length - 1].file_id;
-      const fileResponse = await fetch(
+
+      // Fetch file info from Telegram
+      const fileRes = await fetch(
         `https://api.telegram.org/bot${process.env.BOT_TOKEN}/getFile?file_id=${fileId}`
       );
-      const fileData = await fileResponse.json();
-      const filePath = fileData.result.file_path;
-      imageUrl = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${filePath}`;
+      const fileData = await fileRes.json();
+
+      if (fileData.ok && fileData.result?.file_path) {
+        imageUrl = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${fileData.result.file_path}`;
+      }
     }
 
+    // Random user ID
     const randomUser = Math.floor(100000 + Math.random() * 900000);
-    const apiUrl = `${baseUrl}?prompt=${prompt}&imageUrl=${imageUrl}&user=${randomUser}`;
 
-    const response = await fetch(apiUrl);
+    // Build Gemini API URL safely
+    const apiUrl = new URL("https://api-library-kohi.onrender.com/api/gemini");
+    apiUrl.searchParams.set("prompt", text || "Describe this image");
+    if (imageUrl) apiUrl.searchParams.set("imageUrl", imageUrl);
+    apiUrl.searchParams.set("user", randomUser);
+
+    // Call Gemini API
+    const response = await fetch(apiUrl.toString());
     const textResponse = await response.text();
 
     let cleanMessage = "";
@@ -42,7 +59,6 @@ export default async function handler(req, res) {
       cleanMessage = textResponse;
     }
 
-    // Clean weird characters from API text
     cleanMessage = cleanMessage
       .replace(/\\n/g, "\n")
       .replace(/\nn/g, "\n")
@@ -54,7 +70,7 @@ export default async function handler(req, res) {
 
     if (!cleanMessage) cleanMessage = "⚠️ No response received from Gemini API.";
 
-    // Send the cleaned response
+    // Send clean message
     await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -69,4 +85,4 @@ export default async function handler(req, res) {
     console.error("Webhook Error:", err);
     res.status(500).json({ error: "Internal Server Error" });
   }
-}
+      }
