@@ -1,5 +1,11 @@
 // api/webhook.js
 import fetch from "node-fetch";
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
+
 
 // Function to generate random numeric string (default 10 digits)
 function randomNumberString(length = 10) {
