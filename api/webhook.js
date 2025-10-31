@@ -1,5 +1,3 @@
-please add a code blocks supported all programming language if i ask a code
-
 export const config = {
   api: {
     bodyParser: false,
