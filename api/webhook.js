@@ -1,11 +1,11 @@
 export const config = { api: { bodyParser: false } };
 
-// Helper: random number string
+// Helper: random numbers
 function randomNumberString(length = 10) {
   return Array.from({ length }, () => Math.floor(Math.random() * 10)).join("");
 }
 
-// Helper: check if message asks for code
+// Helper: detect if user wants code
 function isCodeRequest(prompt) {
   if (!prompt) return false;
   const keywords = [
@@ -39,25 +39,25 @@ function isCodeRequest(prompt) {
   return keywords.some((k) => prompt.toLowerCase().includes(k));
 }
 
-// Helper: upload Telegram photo to freeimage API
-async function uploadToFreeImage(fileUrl) {
+// Helper: upload Telegram image to Telegra.ph
+async function uploadToTelegraph(fileUrl) {
   try {
     const fileRes = await fetch(fileUrl);
     const buffer = await fileRes.arrayBuffer();
     const form = new FormData();
-    form.append("image", new Blob([buffer]), "upload.jpg");
+    form.append("file", new Blob([buffer]), "image.jpg");
 
-    const res = await fetch("https://api-library-kohi.onrender.com/api/freeimage", {
+    const uploadRes = await fetch("https://telegra.ph/upload", {
       method: "POST",
       body: form,
     });
 
-    const json = await res.json();
-    if (json?.status && json.data?.display_url) {
-      return json.data.display_url;
+    const json = await uploadRes.json();
+    if (Array.isArray(json) && json[0]?.src) {
+      return "https://telegra.ph" + json[0].src;
     }
   } catch (err) {
-    console.error("❌ Image upload failed:", err);
+    console.error("Telegraph upload failed:", err);
   }
   return "";
 }
@@ -86,7 +86,7 @@ export default async function handler(req, res) {
     const prompt = msg.text || msg.caption || "";
     const photos = msg.photo || [];
 
-    // Send typing action
+    // Typing action
     await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendChatAction`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -106,7 +106,7 @@ export default async function handler(req, res) {
       return res.status(200).end();
     }
 
-    // Handle photo uploads
+    // Process photo (if any)
     let imageUrl = "";
     if (photos.length > 0) {
       const fileId = photos.at(-1).file_id;
@@ -116,7 +116,7 @@ export default async function handler(req, res) {
 
       if (fileInfo.ok && fileInfo.result?.file_path) {
         const fileUrl = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${fileInfo.result.file_path}`;
-        imageUrl = await uploadToFreeImage(fileUrl); // Upload to freeimage
+        imageUrl = await uploadToTelegraph(fileUrl); // public link for Gemini
       }
     }
 
@@ -131,7 +131,7 @@ export default async function handler(req, res) {
 
     let reply = data.data || data.response || "⚠️ No response received from Gemini API.";
 
-    // Format as code if needed
+    // Format code if user asked for code
     if (isCodeRequest(prompt)) {
       reply = `<pre><code>${reply.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</code></pre>`;
       await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
