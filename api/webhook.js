@@ -37,6 +37,11 @@ async function uploadImageToFreeAPI(fileUrl) {
   return "";
 }
 
+// 🔹 Small helper delay
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export default async function handler(req, res) {
   try {
     if (req.method !== "POST") return res.status(405).json({ error: "Method Not Allowed" });
@@ -80,7 +85,12 @@ export default async function handler(req, res) {
       return res.status(200).end();
     }
 
-    // 🔹 If user sent an image, upload it using the working endpoint
+    // 🕒 Delay to ensure Telegram fully sends image + caption
+    if (photos.length > 0 && msg.caption) {
+      await delay(1500); // Wait 1.5 seconds before processing
+    }
+
+    // 🔹 Upload image (if present)
     let imageUrl = "";
     if (photos.length > 0) {
       const fileId = photos.at(-1).file_id;
@@ -90,7 +100,7 @@ export default async function handler(req, res) {
 
       if (fileInfo.ok && fileInfo.result?.file_path) {
         const fileUrl = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${fileInfo.result.file_path}`;
-        imageUrl = await uploadImageToFreeAPI(fileUrl); // ✅ use freeimage uploader
+        imageUrl = await uploadImageToFreeAPI(fileUrl);
       }
     }
 
@@ -135,4 +145,5 @@ export default async function handler(req, res) {
     console.error("❌ Webhook Error:", error);
     res.status(500).json({ error: error.message });
   }
-}
+                }
+          
