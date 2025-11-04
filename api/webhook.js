@@ -1,4 +1,8 @@
+// ✅ Telegram Gemini Conversational Bot
 export const config = { api: { bodyParser: false } };
+
+// Global conversation memory (cleared when server restarts)
+const conversations = new Map();
 
 function randomNumberString(length = 10) {
   return Array.from({ length }, () => Math.floor(Math.random() * 10)).join("");
@@ -16,7 +20,6 @@ function isCodeRequest(prompt) {
   return keywords.some((k) => prompt.toLowerCase().includes(k));
 }
 
-// 🔹 Upload image using the same method as the webpage
 async function uploadImageToFreeAPI(fileUrl) {
   try {
     const fileRes = await fetch(fileUrl);
@@ -37,9 +40,11 @@ async function uploadImageToFreeAPI(fileUrl) {
   return "";
 }
 
-// 🔹 Small helper delay
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function addToConversation(userId, role, content) {
+  if (!conversations.has(userId)) conversations.set(userId, []);
+  const conv = conversations.get(userId);
+  conv.push({ role, content });
+  if (conv.length > 20) conv.splice(0, conv.length - 20); // keep last 10 pairs
 }
 
 export default async function handler(req, res) {
@@ -61,6 +66,7 @@ export default async function handler(req, res) {
 
     const msg = body.message;
     const chatId = msg.chat.id;
+    const userId = chatId.toString();
     const user = randomNumberString(10);
     const prompt = msg.caption || msg.text || "";
     const photos = msg.photo || [];
@@ -74,23 +80,19 @@ export default async function handler(req, res) {
 
     // Handle /start
     if (prompt === "/start") {
+      conversations.delete(userId); // reset chat
       await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           chat_id: chatId,
-          text: "👋 Hi! I’m your Gemini bot.\n\nSend me text or an image with a caption to analyze it.",
+          text: "👋 Hi! I’m your Gemini bot.\n\nSend me text or an image with a caption — I’ll remember our conversation like ChatGPT!",
         }),
       });
       return res.status(200).end();
     }
 
-    // 🕒 Delay to ensure Telegram fully sends image + caption
-    if (photos.length > 0 && msg.caption) {
-      await delay(1500); // Wait 1.5 seconds before processing
-    }
-
-    // 🔹 Upload image (if present)
+    // Upload image (if any)
     let imageUrl = "";
     if (photos.length > 0) {
       const fileId = photos.at(-1).file_id;
@@ -101,20 +103,37 @@ export default async function handler(req, res) {
       if (fileInfo.ok && fileInfo.result?.file_path) {
         const fileUrl = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${fileInfo.result.file_path}`;
         imageUrl = await uploadImageToFreeAPI(fileUrl);
+        // Delay to ensure image fully uploaded
+        await new Promise(r => setTimeout(r, 1000));
       }
     }
 
-    // 🔹 Call Gemini API
+    // Retrieve previous context
+    const past = conversations.get(userId) || [];
+    const history = past
+      .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`)
+      .join("\n");
+
+    // Build full context
+    const fullPrompt = `${history}\nUser: ${prompt}\nAssistant:`;
+
+    // Add user input to memory
+    addToConversation(userId, "user", prompt);
+
+    // Call Gemini API
     const apiUrl = new URL("https://api-library-kohi.onrender.com/api/gemini");
-    apiUrl.searchParams.set("prompt", prompt || "Describe this image");
+    apiUrl.searchParams.set("prompt", fullPrompt);
     apiUrl.searchParams.set("user", user);
     if (imageUrl) apiUrl.searchParams.set("imageUrl", imageUrl);
 
     const response = await fetch(apiUrl);
     const data = await response.json();
-    const reply = data?.data || data?.response || "⚠️ No response received from Gemini API.";
+    const reply = data?.data || data?.response || "⚠️ No response from Gemini.";
 
-    // 🔹 Send result as photo + caption if image exists
+    // Save bot reply
+    addToConversation(userId, "bot", reply);
+
+    // Send as photo reply if image used
     if (imageUrl) {
       await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendPhoto`, {
         method: "POST",
@@ -123,7 +142,6 @@ export default async function handler(req, res) {
           chat_id: chatId,
           photo: imageUrl,
           caption: reply,
-          parse_mode: isCodeRequest(prompt) ? "HTML" : undefined,
         }),
       });
     } else {
@@ -145,5 +163,5 @@ export default async function handler(req, res) {
     console.error("❌ Webhook Error:", error);
     res.status(500).json({ error: error.message });
   }
-                }
-          
+    }
+  
